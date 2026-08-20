@@ -79,14 +79,15 @@ async function cronoExtractPdf(file) {
   return { equipo, fechaHora, activityStatus };
 }
 
-// "ejecutado" si aparece al menos un "Si" en la zona de actividades,
-// "no_ejecutado" si solo aparecen "No", null si no se pudo determinar.
+// "ejecutado" si aparece al menos un "Si" en el documento (junto a alguna
+// actividad), "no_ejecutado" si solo aparecen "No". Los informes de equipo
+// individual usan el encabezado "ACTIVIDADES SEGÚN FRECUENCIAS...", pero los
+// de Rack/Gas Cooler usan "MANTENIMIENTO PREVENTIVO RACK/GAS COOLER" — para
+// cubrir ambos formatos (y cualquier variante futura) buscamos en todo el
+// documento en lugar de anclarnos a un encabezado específico.
 function cronoActivityStatus(text) {
-  const idx = text.search(/ACTIVIDADES\s+SEG[UÚ]N\s+FRECUENCIAS/i);
-  if (idx === -1) return null;
-  const zone = text.slice(idx, idx + 1000);
-  const hasSi = /\bSi\b/i.test(zone);
-  const hasNo = /\bNo\b/i.test(zone);
+  const hasSi = /\bSi\b/i.test(text);
+  const hasNo = /\bNo\b/i.test(text);
   if (hasSi) return "ejecutado";
   if (hasNo) return "no_ejecutado";
   return null;
@@ -153,10 +154,12 @@ function cronoExtractCode(equipoText) {
 
 // Para informes de Rack / Gas Cooler el PDF no trae un código individual —
 // se identifican por similitud contra el nombre del equipo compartido.
+// Se comparan solo letras/números (sin espacios, guiones ni caracteres
+// invisibles que a veces deja la extracción del PDF) para que sea robusto.
 function cronoDetectCategoria(equipoText) {
-  const norm = cronoNormalize(equipoText);
-  if (norm.includes("RACK")) return "RACK DE COMPRESORES";
-  if (norm.includes("GASCOOLER") || norm.includes("GAS COOLER")) return "GAS COOLER";
+  const compact = cronoNormalize(equipoText).replace(/[^A-Z0-9]/g, "");
+  if (compact.includes("RACK")) return "RACK DE COMPRESORES";
+  if (compact.includes("GASCOOLER")) return "GAS COOLER";
   return null;
 }
 
