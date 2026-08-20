@@ -75,7 +75,21 @@ async function cronoExtractPdf(file) {
 
   const equipo = cronoFindEquipoBold(richLines) || cronoFindEquipo(fullText);
   const fechaHora = cronoFindFechaHora(fullText);
-  return { equipo, fechaHora };
+  const activityStatus = cronoActivityStatus(fullText);
+  return { equipo, fechaHora, activityStatus };
+}
+
+// "ejecutado" si aparece al menos un "Si" en la zona de actividades,
+// "no_ejecutado" si solo aparecen "No", null si no se pudo determinar.
+function cronoActivityStatus(text) {
+  const idx = text.search(/ACTIVIDADES\s+SEG[UÚ]N\s+FRECUENCIAS/i);
+  if (idx === -1) return null;
+  const zone = text.slice(idx, idx + 1000);
+  const hasSi = /\bSi\b/i.test(zone);
+  const hasNo = /\bNo\b/i.test(zone);
+  if (hasSi) return "ejecutado";
+  if (hasNo) return "no_ejecutado";
+  return null;
 }
 
 function cronoFindEquipoBold(richLines) {
@@ -272,6 +286,26 @@ function cronoFindEquipoRow(rowIndex, codeUpper) {
   return null;
 }
 
+// Busca, dentro del mismo año-mes, la celda que ya tiene "P" para esa fila.
+// Devuelve { col, ymd } o null si no había nada programado ese mes.
+function cronoFindScheduledPColumn(sheetXml, sharedStrings, dateColMap, rowNumber, year, month) {
+  const rowXml = cronoExtractRow(sheetXml, rowNumber);
+  if (!rowXml) return null;
+  const cells = cronoExtractCells(rowXml);
+  const cellByCol = {};
+  cells.forEach(c => { cellByCol[c.col] = c; });
+
+  for (const [ymd, col] of Object.entries(dateColMap)) {
+    const [y, m] = ymd.split("-").map(Number);
+    if (y !== year || m !== month) continue;
+    const cell = cellByCol[col];
+    if (!cell) continue;
+    const text = cronoCellText(cell, sharedStrings).trim().toUpperCase();
+    if (text === "P") return { col, ymd };
+  }
+  return null;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Escritura quirúrgica de una celda (preserva estilo, no toca lo demás)   */
 /* ---------------------------------------------------------------------- */
@@ -361,9 +395,10 @@ function cronoHandleFiles(files) {
 
 async function cronoProcessFile(item) {
   try {
-    const { equipo, fechaHora } = await cronoExtractPdf(item.file);
+    const { equipo, fechaHora, activityStatus } = await cronoExtractPdf(item.file);
     item.equipoTextPdf = equipo;
     item.fechaHora = fechaHora;
+    item.activityStatus = activityStatus;
 
     if (!equipo || !fechaHora) {
       item.status = "error";
@@ -390,23 +425,47 @@ function cronoResolveMatch(item) {
   }
   const code = cronoExtractCode(item.equipoTextPdf);
   const row = cronoFindEquipoRow(cronoXlsm.rowIndex, code);
-  const ymd = dateToYMD(item.fechaEfectiva);
-  const col = cronoXlsm.dateColMap[ymd];
 
   if (!row) {
     item.status = "warn";
     item.matchInfo = "Equipo no encontrado en el Excel";
     return;
   }
-  if (!col) {
-    item.status = "warn";
-    item.matchInfo = "Fecha fuera del rango del Excel";
+  item.rowNumber = row.row;
+
+  if (item.activityStatus === "ejecutado") {
+    const ymd = dateToYMD(item.fechaEfectiva);
+    const col = cronoXlsm.dateColMap[ymd];
+    if (!col) {
+      item.status = "warn";
+      item.matchInfo = "Fecha fuera del rango del Excel";
+      return;
+    }
+    item.celda = `${col}${row.row}`;
+    item.markValue = "E";
+    item.status = "ok";
+    item.matchInfo = `Fila ${row.row} · ejecutado`;
     return;
   }
-  item.rowNumber = row.row;
-  item.celda = `${col}${row.row}`;
-  item.status = "ok";
-  item.matchInfo = `Fila ${row.row}`;
+
+  if (item.activityStatus === "no_ejecutado") {
+    const year = item.fechaEfectiva.getUTCFullYear();
+    const month = item.fechaEfectiva.getUTCMonth() + 1;
+    const found = cronoFindScheduledPColumn(cronoXlsm.sheetXml, cronoXlsm.sharedStrings, cronoXlsm.dateColMap, row.row, year, month);
+    if (!found) {
+      item.status = "warn";
+      item.matchInfo = "No había P programada ese mes";
+      return;
+    }
+    item.celda = `${found.col}${row.row}`;
+    item.markValue = "X";
+    item.status = "ok";
+    item.matchInfo = `Fila ${row.row} · no ejecutado`;
+    return;
+  }
+
+  item.status = "warn";
+  item.matchInfo = "No se determinó Si/No en el PDF";
 }
 
 function cronoReprocessAll() {
@@ -458,7 +517,7 @@ function cronoRenderRow(item) {
     chipFecha.textContent = fh ? `${fh.ddmmyyyy} ${String(fh.hh).padStart(2,"0")}:${String(fh.mm).padStart(2,"0")} → ${efectivaTxt}` : "sin fecha";
     chipFecha.classList.toggle("chip--found", !!fh);
 
-    chipCelda.textContent = item.status === "ok" ? `${item.celda} (${item.matchInfo})` : (item.matchInfo || "sin cruzar");
+    chipCelda.textContent = item.status === "ok" ? `${item.celda} = "${item.markValue}" (${item.matchInfo})` : (item.matchInfo || "sin cruzar");
     chipCelda.classList.toggle("chip--found", item.status === "ok");
     chipCelda.classList.toggle("chip--missing", item.status !== "ok");
   }
@@ -502,7 +561,7 @@ function updateCronoToolbar() {
     ? "Falta subir el Excel."
     : ok === 0
       ? "Ningún informe tiene un cruce válido todavía."
-      : `Se escribirán ${ok} celda(s) con "E".`;
+      : `Se escribirán ${ok} celda(s) (E o X según corresponda).`;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -519,7 +578,7 @@ applyCronoBtn.addEventListener("click", async () => {
 
   for (const item of cronoItems) {
     if (item.status !== "ok" || !item.celda) continue;
-    const result = cronoWriteCell(xml, item.celda, "E");
+    const result = cronoWriteCell(xml, item.celda, item.markValue || "E");
     if (result.found) {
       xml = result.xml;
       applied++;
