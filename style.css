@@ -232,6 +232,32 @@ body{
   font-family:var(--font-mono); position:relative; z-index:1;
 }
 
-@media (prefers-reduced-motion: reduce){
+/* ---------- Tab bar ---------- */
+.tabbar{
+  display:flex; gap:4px; padding:0 32px; border-bottom:1px solid var(--border-soft);
+  position:relative; z-index:1;
+}
+@media (max-width: 860px){ .tabbar{ padding:0 18px; } }
+.tabbar__btn{
+  background:transparent; border:none; border-bottom:2px solid transparent;
+  color:var(--text-muted); font-family:var(--font-body); font-weight:600; font-size:13px;
+  padding:13px 6px; margin-right:22px; cursor:pointer; transition:color .15s ease, border-color .15s ease;
+}
+.tabbar__btn:hover{ color:var(--text); }
+.tabbar__btn.is-active{ color:var(--accent); border-bottom-color:var(--accent); }
+
+/* ---------- Cronograma extras ---------- */
+.dropzone--small{ padding:24px 16px; }
+.xlsm-status{
+  margin-top:12px; padding:10px 12px; border-radius:8px; font-size:12px;
+  background:var(--panel-alt); border:1px solid var(--border-soft); color:var(--text-muted);
+  font-family:var(--font-mono);
+}
+.xlsm-status.is-ok{ color:var(--success); border-color:rgba(123,201,138,0.3); }
+.xlsm-status.is-error{ color:var(--danger); border-color:rgba(226,114,114,0.35); }
+
+.result-row--crono{ grid-template-columns:1.2fr 1.6fr auto; }
+@media (max-width: 760px){ .result-row--crono{ grid-template-columns:1fr; } }
+.crono-chip-celda.chip--found{ color:var(--accent); }
   *{ animation-duration:0.001ms !important; transition-duration:0.001ms !important; }
 }
