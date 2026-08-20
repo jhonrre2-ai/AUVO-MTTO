@@ -151,6 +151,15 @@ function cronoExtractCode(equipoText) {
   return cronoNormalize(parts[0]);
 }
 
+// Para informes de Rack / Gas Cooler el PDF no trae un código individual —
+// se identifican por similitud contra el nombre del equipo compartido.
+function cronoDetectCategoria(equipoText) {
+  const norm = cronoNormalize(equipoText);
+  if (norm.includes("RACK")) return "RACK DE COMPRESORES";
+  if (norm.includes("GASCOOLER") || norm.includes("GAS COOLER")) return "GAS COOLER";
+  return null;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Parsing del .xlsm (XML crudo, sin reconstruir el archivo)               */
 /* ---------------------------------------------------------------------- */
@@ -267,10 +276,18 @@ function cronoBuildIndexes(sheetXml, sharedStrings) {
     const cells = cronoExtractCells(rowXml);
     const cellB = cells.find(c => c.col === "B");
     const cellC = cells.find(c => c.col === "C");
-    const textB = cellB ? cronoCellText(cellB, sharedStrings) : "";
-    const textC = cellC ? cronoCellText(cellC, sharedStrings) : "";
-    if (!textB && !textC) continue;
-    rowIndex.push({ row: r, textB: cronoNormalize(textB), textC: cronoNormalize(textC) });
+    const cellI = cells.find(c => c.col === "I");
+    const textBRaw = cellB ? cronoCellText(cellB, sharedStrings) : "";
+    const textCRaw = cellC ? cronoCellText(cellC, sharedStrings) : "";
+    const textIRaw = cellI ? cronoCellText(cellI, sharedStrings) : "";
+    if (!textBRaw && !textCRaw) continue;
+    rowIndex.push({
+      row: r,
+      textB: cronoNormalize(textBRaw),
+      textC: cronoNormalize(textCRaw),
+      textI: cronoNormalize(textIRaw),
+      textBDisplay: (textBRaw || "").replace(/\s+/g, " ").trim(),
+    });
   }
 
   return { dateColMap, rowIndex };
@@ -418,14 +435,24 @@ async function cronoProcessFile(item) {
 }
 
 function cronoResolveMatch(item) {
+  item.writes = [];
+  item.predictivoOptions = null;
+
   if (!cronoXlsm) {
     item.status = "warn";
     item.matchInfo = "Sube primero el Excel";
     return;
   }
+
+  const categoria = cronoDetectCategoria(item.equipoTextPdf);
+  if (categoria) {
+    cronoResolveCategoriaMatch(item, categoria);
+    return;
+  }
+
+  // --- Equipo individual con código propio (neveras, autocontenidas, etc.) ---
   const code = cronoExtractCode(item.equipoTextPdf);
   const row = cronoFindEquipoRow(cronoXlsm.rowIndex, code);
-
   if (!row) {
     item.status = "warn";
     item.matchInfo = "Equipo no encontrado en el Excel";
@@ -441,8 +468,7 @@ function cronoResolveMatch(item) {
       item.matchInfo = "Fecha fuera del rango del Excel";
       return;
     }
-    item.celda = `${col}${row.row}`;
-    item.markValue = "E";
+    item.writes.push({ celda: `${col}${row.row}`, markValue: "E" });
     item.status = "ok";
     item.matchInfo = `Fila ${row.row} · ejecutado`;
     return;
@@ -457,8 +483,7 @@ function cronoResolveMatch(item) {
       item.matchInfo = "No había P programada ese mes";
       return;
     }
-    item.celda = `${found.col}${row.row}`;
-    item.markValue = "X";
+    item.writes.push({ celda: `${found.col}${row.row}`, markValue: "X" });
     item.status = "ok";
     item.matchInfo = `Fila ${row.row} · no ejecutado`;
     return;
@@ -466,6 +491,56 @@ function cronoResolveMatch(item) {
 
   item.status = "warn";
   item.matchInfo = "No se determinó Si/No en el PDF";
+}
+
+// --- Rack de Compresores / Gas Cooler: una sola visita cubre varias filas
+// (todas las de frecuencia "Mensual" bajo esa categoría), todas en la misma fecha. ---
+function cronoResolveCategoriaMatch(item, categoria) {
+  const rows = cronoXlsm.rowIndex.filter(r => r.textC === categoria && r.textI === "MENSUAL");
+  if (!rows.length) {
+    item.status = "warn";
+    item.matchInfo = `No se encontraron filas "Mensual" para ${categoria}`;
+    return;
+  }
+
+  if (item.activityStatus === "ejecutado") {
+    const ymd = dateToYMD(item.fechaEfectiva);
+    const col = cronoXlsm.dateColMap[ymd];
+    if (!col) {
+      item.status = "warn";
+      item.matchInfo = "Fecha fuera del rango del Excel";
+      return;
+    }
+    rows.forEach(r => item.writes.push({ celda: `${col}${r.row}`, markValue: "E" }));
+    item.status = "ok";
+    item.matchInfo = `${categoria} · ${rows.length} fila(s) · ejecutado`;
+  } else if (item.activityStatus === "no_ejecutado") {
+    const year = item.fechaEfectiva.getUTCFullYear();
+    const month = item.fechaEfectiva.getUTCMonth() + 1;
+    rows.forEach(r => {
+      const found = cronoFindScheduledPColumn(cronoXlsm.sheetXml, cronoXlsm.sharedStrings, cronoXlsm.dateColMap, r.row, year, month);
+      if (found) item.writes.push({ celda: `${found.col}${r.row}`, markValue: "X" });
+    });
+    if (!item.writes.length) {
+      item.status = "warn";
+      item.matchInfo = "No había P programada ese mes en ninguna fila";
+      return;
+    }
+    item.status = "ok";
+    item.matchInfo = `${categoria} · ${item.writes.length} fila(s) · no ejecutado`;
+  } else {
+    item.status = "warn";
+    item.matchInfo = "No se determinó Si/No en el PDF";
+    return;
+  }
+
+  // Los informes "Predictivo del Sistema" (Red de Refrigeración CO2) no llegan
+  // en formato AUVO estándar — se marcan manualmente el mismo día del Rack.
+  if (categoria === "RACK DE COMPRESORES" && item.activityStatus === "ejecutado") {
+    item.predictivoOptions = cronoXlsm.rowIndex
+      .filter(r => r.textC === "RED DE REFRIGERACION CO2" && r.textI)
+      .map(r => ({ row: r.row, label: r.textBDisplay, checked: false }));
+  }
 }
 
 function cronoReprocessAll() {
@@ -517,10 +592,22 @@ function cronoRenderRow(item) {
     chipFecha.textContent = fh ? `${fh.ddmmyyyy} ${String(fh.hh).padStart(2,"0")}:${String(fh.mm).padStart(2,"0")} → ${efectivaTxt}` : "sin fecha";
     chipFecha.classList.toggle("chip--found", !!fh);
 
-    chipCelda.textContent = item.status === "ok" ? `${item.celda} = "${item.markValue}" (${item.matchInfo})` : (item.matchInfo || "sin cruzar");
-    chipCelda.classList.toggle("chip--found", item.status === "ok");
-    chipCelda.classList.toggle("chip--missing", item.status !== "ok");
+    const writes = item.writes || [];
+    if (item.status === "ok" && writes.length) {
+      const preview = writes.length === 1
+        ? `${writes[0].celda} = "${writes[0].markValue}"`
+        : `${writes.length} celdas = "${writes[0].markValue}"`;
+      chipCelda.textContent = `${preview} (${item.matchInfo})`;
+      chipCelda.classList.add("chip--found");
+      chipCelda.classList.remove("chip--missing");
+    } else {
+      chipCelda.textContent = item.matchInfo || "sin cruzar";
+      chipCelda.classList.add("chip--missing");
+      chipCelda.classList.remove("chip--found");
+    }
   }
+
+  cronoRenderPredictivoChecklist(row, item);
 
   const statusText = row.querySelector(".status-text");
   statusText.textContent =
@@ -528,6 +615,43 @@ function cronoRenderRow(item) {
     item.status === "ok" ? "Listo para aplicar" :
     item.status === "warn" ? "Revisar" :
     "Error";
+}
+
+/* Checklist manual para "Predictivo del Sistema", ligado a la fecha del Rack */
+function cronoRenderPredictivoChecklist(row, item) {
+  let box = row.querySelector(".predictivo-box");
+  if (!item.predictivoOptions) {
+    if (box) box.remove();
+    return;
+  }
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "predictivo-box";
+    box.innerHTML = `<p class="predictivo-box__title">Predictivo del Sistema realizado en esta visita (opcional):</p>`;
+    item.predictivoOptions.forEach((opt, idx) => {
+      const label = document.createElement("label");
+      label.className = "predictivo-box__item";
+      label.innerHTML = `<input type="checkbox" data-idx="${idx}"> <span>${opt.label}</span>`;
+      label.querySelector("input").addEventListener("change", (e) => {
+        opt.checked = e.target.checked;
+        cronoSyncPredictivoWrites(item);
+      });
+      box.appendChild(label);
+    });
+    row.appendChild(box);
+  }
+}
+
+function cronoSyncPredictivoWrites(item) {
+  if (!item.predictivoOptions) return;
+  const ymd = dateToYMD(item.fechaEfectiva);
+  const col = cronoXlsm.dateColMap[ymd];
+  item.predictivoWrites = [];
+  if (!col) return;
+  item.predictivoOptions.forEach(opt => {
+    if (opt.checked) item.predictivoWrites.push({ celda: `${col}${opt.row}`, markValue: "E" });
+  });
+  updateCronoToolbar();
 }
 
 function cronoRemoveItem(id) {
@@ -552,16 +676,18 @@ function updateCronoToolbar() {
   const total = cronoItems.length;
   const ok = cronoItems.filter(i => i.status === "ok").length;
   const warn = total - ok;
+  const totalCells = cronoItems.reduce((acc, i) => acc + (i.writes ? i.writes.length : 0) + (i.predictivoWrites ? i.predictivoWrites.length : 0), 0);
+
   document.getElementById("cronoStatTotal").textContent = total;
   document.getElementById("cronoStatOk").textContent = `${ok} cruzados`;
   document.getElementById("cronoStatWarn").textContent = `${warn} sin coincidencia`;
 
-  applyCronoBtn.disabled = !cronoXlsm || ok === 0;
+  applyCronoBtn.disabled = !cronoXlsm || totalCells === 0;
   cronoApplyHint.textContent = !cronoXlsm
     ? "Falta subir el Excel."
-    : ok === 0
+    : totalCells === 0
       ? "Ningún informe tiene un cruce válido todavía."
-      : `Se escribirán ${ok} celda(s) (E o X según corresponda).`;
+      : `Se escribirán ${totalCells} celda(s) (E o X según corresponda).`;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -577,13 +703,16 @@ applyCronoBtn.addEventListener("click", async () => {
   const failed = [];
 
   for (const item of cronoItems) {
-    if (item.status !== "ok" || !item.celda) continue;
-    const result = cronoWriteCell(xml, item.celda, item.markValue || "E");
-    if (result.found) {
-      xml = result.xml;
-      applied++;
-    } else {
-      failed.push(item.celda);
+    if (item.status !== "ok") continue;
+    const allWrites = [...(item.writes || []), ...(item.predictivoWrites || [])];
+    for (const w of allWrites) {
+      const result = cronoWriteCell(xml, w.celda, w.markValue);
+      if (result.found) {
+        xml = result.xml;
+        applied++;
+      } else {
+        failed.push(w.celda);
+      }
     }
   }
 
