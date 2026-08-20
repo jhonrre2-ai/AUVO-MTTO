@@ -277,6 +277,12 @@ fileInput.addEventListener("change", (e) => {
 function handleNewFiles(files) {
   if (!files.length) return;
   toolbar.hidden = false;
+
+  const zipNameInput = document.getElementById("zipNameInput");
+  if (!zipNameInput.value.trim()) {
+    zipNameInput.value = `informes_renombrados_${new Date().toISOString().slice(0, 10)}`;
+  }
+
   files.forEach(file => {
     const id = crypto.randomUUID();
     const item = { id, file, status: "loading", store: null, equipo: null, fecha: null, finalName: "", rawText: "" };
@@ -324,6 +330,10 @@ function renderResultRow(item, isNew) {
 
     row.querySelector(".result-row__input").addEventListener("input", (e) => {
       item.finalName = e.target.value;
+    });
+
+    row.querySelector(".result-row__remove").addEventListener("click", () => {
+      removeItem(item.id);
     });
   }
 
@@ -377,11 +387,25 @@ function updateToolbar() {
   fileCountFoot.textContent = `${total} archivo(s) en memoria`;
 }
 
+function removeItem(id) {
+  const idx = items.findIndex(i => i.id === id);
+  if (idx === -1) return;
+  items.splice(idx, 1);
+
+  const row = rowElements.get(id);
+  if (row) row.remove();
+  rowElements.delete(id);
+
+  updateToolbar();
+  if (items.length === 0) toolbar.hidden = true;
+}
+
 document.getElementById("clearBtn").addEventListener("click", () => {
   items = [];
   rowElements.clear();
   resultsEl.innerHTML = "";
   toolbar.hidden = true;
+  document.getElementById("zipNameInput").value = "";
   updateToolbar();
 });
 
@@ -419,7 +443,13 @@ downloadZipBtn.addEventListener("click", async () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `informes_renombrados_${new Date().toISOString().slice(0,10)}.zip`;
+
+  const zipNameInput = document.getElementById("zipNameInput");
+  let zipName = zipNameInput.value.trim();
+  if (!zipName) zipName = `informes_renombrados_${new Date().toISOString().slice(0, 10)}`;
+  zipName = zipName.replace(/[\\/:*?"<>|]/g, "-").replace(/\.zip$/i, "");
+
+  a.download = `${zipName}.zip`;
   a.click();
   URL.revokeObjectURL(url);
 
