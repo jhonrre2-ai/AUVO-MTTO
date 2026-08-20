@@ -43,11 +43,13 @@ async function extractPdfText(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   let fullText = "";
+  let richLines = []; // [{ y, parts:[{x, str, bold}] }] — conserva info de negrilla por palabra
 
   const maxPages = Math.min(pdf.numPages, 2); // los datos que necesitamos siempre están en la página 1
   for (let p = 1; p <= maxPages; p++) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
+    const styles = content.styles || {};
 
     // Agrupar items por línea usando la coordenada Y (con tolerancia)
     const lines = [];
@@ -55,15 +57,21 @@ async function extractPdfText(file) {
       const y = Math.round(item.transform[5]);
       let line = lines.find(l => Math.abs(l.y - y) <= 2);
       if (!line) { line = { y, parts: [] }; lines.push(line); }
-      line.parts.push({ x: item.transform[4], str: item.str });
+
+      const style = styles[item.fontName] || {};
+      const fam = (style.fontFamily || "").toLowerCase();
+      const bold = /bold|black|heavy|semibold/.test(fam) || /bold/i.test(item.fontName || "");
+
+      line.parts.push({ x: item.transform[4], str: item.str, bold });
     });
     lines.sort((a, b) => b.y - a.y);
     lines.forEach(l => l.parts.sort((a, b) => a.x - b.x));
+    lines.forEach(l => richLines.push(l));
 
     const pageText = lines.map(l => l.parts.map(p => p.str).join(" ").replace(/\s+/g, " ").trim()).join("\n");
     fullText += pageText + "\n";
   }
-  return fullText;
+  return { fullText, richLines };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -84,6 +92,34 @@ function findStore(text) {
   return null;
 }
 
+// Método principal: el nombre del equipo siempre viene en negrilla, el
+// "Identificador ..." que le sigue no. Cortamos justo donde deja de ser negrilla.
+function findEquipoBold(richLines) {
+  for (const line of richLines) {
+    const labelIdx = line.parts.findIndex(p => /Equipo/i.test(p.str));
+    if (labelIdx === -1) continue;
+
+    let collected = [];
+    let started = false;
+    for (let i = labelIdx + 1; i < line.parts.length; i++) {
+      const part = line.parts[i];
+      const isJustColon = /^:?\s*$/.test(part.str);
+      if (isJustColon && !started) continue; // salta el ":" del label
+
+      if (part.bold) {
+        started = true;
+        collected.push(part.str);
+      } else if (started) {
+        break; // dejó de ser negrilla → aquí empieza "Identificador ..."
+      }
+    }
+    const text = collected.join(" ").replace(/\s+/g, " ").trim().replace(/[-\s]+$/, "");
+    if (text) return text;
+  }
+  return null;
+}
+
+// Respaldo por si el PDF no trae info de negrilla utilizable.
 function findEquipo(text) {
   const idx = text.search(/Equipo\s*:/i);
   if (idx === -1) return null;
@@ -256,11 +292,11 @@ function handleNewFiles(files) {
 /* ---------------------------------------------------------------------- */
 async function processFile(item) {
   try {
-    const text = await extractPdfText(item.file);
-    item.rawText = text;
-    item.store = findStore(text);
-    item.equipo = findEquipo(text);
-    item.fecha = findFecha(text);
+    const { fullText, richLines } = await extractPdfText(item.file);
+    item.rawText = fullText;
+    item.store = findStore(fullText);
+    item.equipo = findEquipoBold(richLines) || findEquipo(fullText);
+    item.fecha = findFecha(fullText);
     item.finalName = buildFinalName(item.store, item.equipo, item.fecha);
     item.status = (item.store && item.equipo && item.fecha) ? "ok" : "warn";
   } catch (err) {
