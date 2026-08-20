@@ -88,8 +88,10 @@ function findEquipo(text) {
   const idx = text.search(/Equipo\s*:/i);
   if (idx === -1) return null;
   const sub = text.slice(idx);
-  const m = sub.match(/Equipo\s*:\s*([^\n]*?)(?:\s+Identificador\b|\n|$)/i);
-  if (m && m[1].trim()) return m[1].trim();
+  // Algunos PDF parten "Identificador" en pedazos por ligaduras de fuente
+  // (ej. "Identi fi cador"), así que cortamos apenas aparezca el prefijo "Identi".
+  const m = sub.match(/Equipo\s*:\s*([^\n]*?)(?:\s*Identi|\n|$)/i);
+  if (m && m[1].trim()) return m[1].trim().replace(/[-\s]+$/, "");
   return null;
 }
 
