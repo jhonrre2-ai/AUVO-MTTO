@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Renombrador AUVO · Arneg Andina</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="scanline" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="topbar__brand">
+    <span class="topbar__mark">R//</span>
+    <div>
+      <h1>Renombrador AUVO</h1>
+      <p>Informes de mantenimiento · procesados en tu navegador, nada se sube a ningún servidor</p>
+    </div>
+  </div>
+  <div class="topbar__badge" id="privacyBadge">100% local</div>
+</header>
+
+<main class="layout">
+
+  <!-- ===================== PANEL IZQUIERDO: TIENDAS ===================== -->
+  <section class="panel panel--stores" aria-labelledby="storesTitle">
+    <div class="panel__head">
+      <h2 id="storesTitle">Tiendas registradas</h2>
+      <span class="panel__count" id="storeCount">0</span>
+    </div>
+    <p class="panel__hint">El texto de "coincidencia" se busca dentro del PDF (sin importar mayúsculas/tildes). La abreviatura se asigna tal cual la escribas, nunca se calcula sola.</p>
+
+    <form id="storeForm" class="store-form">
+      <div class="field">
+        <label for="storeMatch">Texto a buscar en el PDF</label>
+        <input type="text" id="storeMatch" placeholder="Ej: EXITO EJECUTIVOS" required>
+      </div>
+      <div class="field">
+        <label for="storeAbbr">Abreviatura para el archivo</label>
+        <input type="text" id="storeAbbr" placeholder="Ej: EXI EJE" required>
+      </div>
+      <button type="submit" class="btn btn--accent">+ Agregar tienda</button>
+    </form>
+
+    <ul class="store-list" id="storeList"></ul>
+
+    <div class="store-actions">
+      <button id="exportStores" class="btn btn--ghost btn--sm" type="button">Exportar lista</button>
+      <label class="btn btn--ghost btn--sm" for="importStoresInput">Importar lista</label>
+      <input type="file" id="importStoresInput" accept="application/json" hidden>
+    </div>
+  </section>
+
+  <!-- ===================== PANEL DERECHO: PROCESO ===================== -->
+  <section class="panel panel--main">
+
+    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Subir archivos PDF">
+      <input type="file" id="fileInput" accept="application/pdf" multiple hidden>
+      <div class="dropzone__icon">⇩</div>
+      <p class="dropzone__title">Suelta aquí tus PDF de AUVO</p>
+      <p class="dropzone__sub">o haz clic para seleccionarlos · puedes subir varios a la vez</p>
+    </div>
+
+    <div class="toolbar" id="toolbar" hidden>
+      <div class="toolbar__stats">
+        <span id="statTotal">0</span> archivo(s) ·
+        <span id="statOk" class="stat-ok">0 listos</span> ·
+        <span id="statWarn" class="stat-warn">0 con alerta</span>
+      </div>
+      <div class="toolbar__actions">
+        <button id="clearBtn" class="btn btn--ghost btn--sm" type="button">Vaciar todo</button>
+        <button id="downloadZipBtn" class="btn btn--accent" type="button" disabled>Descargar .zip renombrado</button>
+      </div>
+    </div>
+
+    <div class="results" id="results"></div>
+
+    <p class="footnote">
+      Formato final: <code>ABREVIATURA - EQUIPO - DD-MM-AAAA.pdf</code>. Si algún dato no se detecta, edita directamente la casilla del nombre antes de descargar.
+    </p>
+  </section>
+
+</main>
+
+<footer class="pagefoot">
+  <span>Arneg Andina · Herramienta interna de Postventa</span>
+  <span id="fileCountFoot">0 archivos en memoria</span>
+</footer>
+
+<template id="resultRowTemplate">
+  <article class="result-row" data-state="pending">
+    <div class="result-row__original">
+      <span class="result-row__label">Original</span>
+      <span class="result-row__filename result-row__filename--original"></span>
+    </div>
+    <div class="result-row__extracted">
+      <span class="chip chip--store"></span>
+      <span class="chip chip--equipo"></span>
+      <span class="chip chip--fecha"></span>
+    </div>
+    <div class="result-row__final">
+      <span class="result-row__label">Nombre final</span>
+      <input type="text" class="result-row__input" spellcheck="false">
+    </div>
+    <div class="result-row__status">
+      <span class="status-dot"></span>
+      <span class="status-text"></span>
+    </div>
+  </article>
+</template>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
