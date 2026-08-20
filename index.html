@@ -73,7 +73,11 @@
       </div>
       <div class="toolbar__actions">
         <button id="clearBtn" class="btn btn--ghost btn--sm" type="button">Vaciar todo</button>
-        <button id="downloadZipBtn" class="btn btn--accent" type="button" disabled>Descargar .zip renombrado</button>
+        <div class="zip-name-field">
+          <input type="text" id="zipNameInput" class="zip-name-input" placeholder="nombre_del_zip" spellcheck="false">
+          <span class="zip-name-ext">.zip</span>
+        </div>
+        <button id="downloadZipBtn" class="btn btn--accent" type="button" disabled>Descargar .zip</button>
       </div>
     </div>
 
@@ -109,6 +113,7 @@
     <div class="result-row__status">
       <span class="status-dot"></span>
       <span class="status-text"></span>
+      <button class="result-row__remove" type="button" title="Quitar de la lista">✕</button>
     </div>
   </article>
 </template>
