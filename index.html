@@ -24,7 +24,12 @@
   <div class="topbar__badge" id="privacyBadge">100% local</div>
 </header>
 
-<main class="layout">
+<nav class="tabbar" role="tablist">
+  <button class="tabbar__btn is-active" id="tabBtnRenombrador" type="button" role="tab" aria-selected="true">Renombrador</button>
+  <button class="tabbar__btn" id="tabBtnCronograma" type="button" role="tab" aria-selected="false">Cronograma</button>
+</nav>
+
+<main class="layout" id="viewRenombrador">
 
   <!-- ===================== PANEL IZQUIERDO: TIENDAS ===================== -->
   <section class="panel panel--stores" aria-labelledby="storesTitle">
@@ -90,6 +95,82 @@
 
 </main>
 
+<main class="layout layout--crono" id="viewCronograma" hidden>
+
+  <section class="panel panel--stores">
+    <div class="panel__head">
+      <h2>1. Sube el Excel maestro</h2>
+    </div>
+    <p class="panel__hint">El cronograma anual (.xlsm). Se procesa en tu navegador — solo se editan las celdas exactas de fecha/equipo, todo lo demás (macros, fórmulas, formato) queda intacto.</p>
+
+    <div class="dropzone dropzone--small" id="xlsmDropzone" tabindex="0" role="button" aria-label="Subir cronograma Excel">
+      <input type="file" id="xlsmInput" accept=".xlsm,.xlsx" hidden>
+      <div class="dropzone__icon">⇩</div>
+      <p class="dropzone__title" id="xlsmFileLabel">Suelta aquí el .xlsm</p>
+      <p class="dropzone__sub">o haz clic para seleccionarlo</p>
+    </div>
+
+    <div class="xlsm-status" id="xlsmStatus" hidden></div>
+
+    <div class="panel__head" style="margin-top:22px;">
+      <h2>3. Aplica y descarga</h2>
+    </div>
+    <p class="panel__hint">Se escribe "E" en la celda que cruza el equipo con la fecha real de ejecución (ajustada si fue de madrugada). La "P" original nunca se mueve.</p>
+    <button id="applyCronoBtn" class="btn btn--accent" type="button" disabled style="width:100%;">Generar Excel actualizado</button>
+    <p class="footnote" id="cronoApplyHint" style="margin-top:10px;"></p>
+  </section>
+
+  <section class="panel panel--main">
+    <div class="panel__head">
+      <h2 style="font-size:15px;">2. Sube los informes PDF del mes</h2>
+    </div>
+
+    <div class="dropzone" id="cronoDropzone" tabindex="0" role="button" aria-label="Subir informes PDF">
+      <input type="file" id="cronoFileInput" accept="application/pdf" multiple hidden>
+      <div class="dropzone__icon">⇩</div>
+      <p class="dropzone__title">Suelta aquí los PDF de AUVO</p>
+      <p class="dropzone__sub">se cruzan automáticamente contra el Excel por equipo + fecha</p>
+    </div>
+
+    <div class="toolbar" id="cronoToolbar" hidden>
+      <div class="toolbar__stats">
+        <span id="cronoStatTotal">0</span> informe(s) ·
+        <span id="cronoStatOk" class="stat-ok">0 cruzados</span> ·
+        <span id="cronoStatWarn" class="stat-warn">0 sin coincidencia</span>
+      </div>
+      <div class="toolbar__actions">
+        <button id="cronoClearBtn" class="btn btn--ghost btn--sm" type="button">Vaciar todo</button>
+      </div>
+    </div>
+
+    <div class="results" id="cronoResults"></div>
+
+    <p class="footnote">
+      Si un informe no encuentra fila de equipo (por ejemplo, actividades genéricas de Rack/Gas Cooler), queda marcado "Revisar" y no se aplica — así nunca se escribe una "E" en el lugar equivocado.
+    </p>
+  </section>
+
+</main>
+
+<template id="cronoRowTemplate">
+  <article class="result-row result-row--crono" data-state="pending">
+    <div class="result-row__original">
+      <span class="result-row__label">Informe</span>
+      <span class="result-row__filename result-row__filename--original"></span>
+    </div>
+    <div class="result-row__extracted">
+      <span class="chip chip--store crono-chip-equipo"></span>
+      <span class="chip chip--fecha crono-chip-fecha"></span>
+      <span class="chip chip--equipo crono-chip-celda"></span>
+    </div>
+    <div class="result-row__status">
+      <span class="status-dot"></span>
+      <span class="status-text"></span>
+      <button class="result-row__remove" type="button" title="Excluir del cruce">✕</button>
+    </div>
+  </article>
+</template>
+
 <footer class="pagefoot">
   <span>Arneg Andina · Herramienta interna de Postventa</span>
   <span id="fileCountFoot">0 archivos en memoria</span>
@@ -121,5 +202,28 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="app.js"></script>
+<script src="cronograma.js"></script>
+<script>
+  // Interruptor de pestañas Renombrador / Cronograma
+  (function () {
+    const btnR = document.getElementById('tabBtnRenombrador');
+    const btnC = document.getElementById('tabBtnCronograma');
+    const viewR = document.getElementById('viewRenombrador');
+    const viewC = document.getElementById('viewCronograma');
+
+    function activate(which) {
+      const isR = which === 'renombrador';
+      viewR.hidden = !isR;
+      viewC.hidden = isR;
+      btnR.classList.toggle('is-active', isR);
+      btnC.classList.toggle('is-active', !isR);
+      btnR.setAttribute('aria-selected', String(isR));
+      btnC.setAttribute('aria-selected', String(!isR));
+    }
+
+    btnR.addEventListener('click', () => activate('renombrador'));
+    btnC.addEventListener('click', () => activate('cronograma'));
+  })();
+</script>
 </body>
 </html>
