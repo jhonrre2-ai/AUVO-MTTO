@@ -113,7 +113,18 @@
     <div class="xlsm-status" id="xlsmStatus" hidden></div>
 
     <div class="panel__head" style="margin-top:22px;">
-      <h2>3. Aplica y descarga</h2>
+      <h2>3. Exportar PDF del mes</h2>
+    </div>
+    <p class="panel__hint">Genera la vista de impresión (columnas fijas + el mes elegido). Se abre en una pestaña nueva; ahí usas "Guardar como PDF" desde el diálogo de impresión del navegador.</p>
+    <div class="field" style="margin-bottom:10px;">
+      <label for="cronoMonthSelect">Mes a imprimir</label>
+      <select id="cronoMonthSelect" disabled></select>
+    </div>
+    <button id="exportPdfBtn" class="btn btn--accent" type="button" disabled style="width:100%;">Generar vista de impresión</button>
+    <p class="footnote" id="exportPdfHint" style="margin-top:10px;">Sube primero el Excel.</p>
+
+    <div class="panel__head" style="margin-top:22px;">
+      <h2>4. Aplica y descarga</h2>
     </div>
     <p class="panel__hint">Se escribe "E" en la celda que cruza el equipo con la fecha real de ejecución (ajustada si fue de madrugada). La "P" original nunca se mueve.</p>
     <button id="applyCronoBtn" class="btn btn--accent" type="button" disabled style="width:100%;">Generar Excel actualizado</button>
