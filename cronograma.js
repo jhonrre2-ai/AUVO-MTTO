@@ -279,9 +279,11 @@ function cronoBuildIndexes(sheetXml, sharedStrings) {
     const cells = cronoExtractCells(rowXml);
     const cellB = cells.find(c => c.col === "B");
     const cellC = cells.find(c => c.col === "C");
+    const cellD = cells.find(c => c.col === "D");
     const cellI = cells.find(c => c.col === "I");
     const textBRaw = cellB ? cronoCellText(cellB, sharedStrings) : "";
     const textCRaw = cellC ? cronoCellText(cellC, sharedStrings) : "";
+    const textDRaw = cellD ? cronoCellText(cellD, sharedStrings) : "";
     const textIRaw = cellI ? cronoCellText(cellI, sharedStrings) : "";
     if (!textBRaw && !textCRaw) continue;
     rowIndex.push({
@@ -290,6 +292,8 @@ function cronoBuildIndexes(sheetXml, sharedStrings) {
       textC: cronoNormalize(textCRaw),
       textI: cronoNormalize(textIRaw),
       textBDisplay: (textBRaw || "").replace(/\s+/g, " ").trim(),
+      textCDisplay: (textCRaw || "").replace(/\s+/g, " ").trim(),
+      textDDisplay: (textDRaw || "").replace(/\s+/g, " ").trim(),
     });
   }
 
@@ -342,6 +346,32 @@ function cronoWriteCell(sheetXml, cellRef, value) {
   return { xml: newXml, found: true };
 }
 
+/* Lee las celdas combinadas de la columna A (ej. "A16:A28") para saber dónde
+   empieza y termina cada categoría (PREDICTIVO, RACK, GAS COOLER, etc.),
+   sin tener que codificarlas a mano — si el Excel cambia, esto se ajusta solo. */
+function cronoGetCategoriaBoundaries(sheetXml, sharedStrings) {
+  const mergeBlock = sheetXml.match(/<mergeCells[^>]*>([\s\S]*?)<\/mergeCells>/);
+  if (!mergeBlock) return [];
+  const refs = [...mergeBlock[1].matchAll(/ref="A(\d+):A(\d+)"/g)];
+  const boundaries = refs.map(m => ({ startRow: parseInt(m[1], 10), endRow: parseInt(m[2], 10) }));
+  boundaries.sort((a, b) => a.startRow - b.startRow);
+
+  return boundaries
+    .filter(b => b.startRow >= 9) // ignora el encabezado del formato (filas 1-8)
+    .map(b => {
+      const rowXml = cronoExtractRow(sheetXml, b.startRow);
+      const cells = rowXml ? cronoExtractCells(rowXml) : [];
+      const cellA = cells.find(c => c.col === "A");
+      const label = cellA ? cronoCellText(cellA, sharedStrings).trim() : "";
+      return { ...b, label };
+    })
+    // Solo las secciones reales de mantenimiento (Predictivo/Preventivo). Más
+    // abajo en la hoja hay tablas auxiliares de conteo (Programaciones,
+    // Ejecuciones por trabajador) que comparten el mismo estilo de columna A
+    // combinada pero no son filas de equipo.
+    .filter(b => /^(PREDICTIVO|PREVENTIVO)\b/i.test(b.label));
+}
+
 /* ---------------------------------------------------------------------- */
 /* UI: subir el Excel                                                      */
 /* ---------------------------------------------------------------------- */
@@ -368,11 +398,13 @@ async function handleXlsmFile(file) {
   try {
     const parsed = await cronoParseXlsm(file);
     const { dateColMap, rowIndex } = cronoBuildIndexes(parsed.sheetXml, parsed.sharedStrings);
-    cronoXlsm = { ...parsed, dateColMap, rowIndex };
+    const categorias = cronoGetCategoriaBoundaries(parsed.sheetXml, parsed.sharedStrings);
+    cronoXlsm = { ...parsed, dateColMap, rowIndex, categorias };
 
     xlsmStatus.className = "xlsm-status is-ok";
     xlsmStatus.textContent = `Listo · ${rowIndex.length} filas de equipos detectadas · ${Object.keys(dateColMap).length} columnas de fecha`;
 
+    cronoPopulateMonthSelect();
     cronoReprocessAll();
   } catch (err) {
     console.error(err);
@@ -381,6 +413,7 @@ async function handleXlsmFile(file) {
     cronoXlsm = null;
   }
   updateCronoToolbar();
+  updateExportPdfUI();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -691,6 +724,11 @@ function updateCronoToolbar() {
     : totalCells === 0
       ? "Ningún informe tiene un cruce válido todavía."
       : `Se escribirán ${totalCells} celda(s) (E o X según corresponda).`;
+
+  if (typeof cronoAutoDetectMonth === "function") {
+    cronoAutoDetectMonth();
+    updateExportPdfUI();
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -737,3 +775,219 @@ applyCronoBtn.addEventListener("click", async () => {
     alert(`Se aplicaron ${applied} celda(s). ${failed.length} no se encontraron en el archivo: ${failed.join(", ")}`);
   }
 });
+
+/* ==========================================================================
+   Exportar PDF del mes (Etapa 2) — vista de impresión en HTML/CSS que se
+   guarda como PDF usando el diálogo de impresión nativo del navegador.
+   ========================================================================== */
+const MESES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DIAS_ES = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+
+const cronoMonthSelect = document.getElementById("cronoMonthSelect");
+const exportPdfBtn = document.getElementById("exportPdfBtn");
+const exportPdfHint = document.getElementById("exportPdfHint");
+let cronoMonthManuallySet = false;
+
+cronoMonthSelect.addEventListener("change", () => { cronoMonthManuallySet = true; });
+
+function cronoPopulateMonthSelect() {
+  if (!cronoXlsm) return;
+  const months = new Set();
+  Object.keys(cronoXlsm.dateColMap).forEach(ymd => {
+    const [y, m] = ymd.split("-");
+    months.add(`${y}-${m}`);
+  });
+  const sorted = [...months].sort();
+
+  const prevValue = cronoMonthSelect.value;
+  cronoMonthSelect.innerHTML = "";
+  sorted.forEach(ym => {
+    const [y, m] = ym.split("-").map(Number);
+    const opt = document.createElement("option");
+    opt.value = ym;
+    opt.textContent = `${MESES_ES[m - 1]} ${y}`;
+    cronoMonthSelect.appendChild(opt);
+  });
+  cronoMonthSelect.disabled = false;
+
+  if (prevValue && sorted.includes(prevValue)) {
+    cronoMonthSelect.value = prevValue;
+  } else {
+    // Por defecto, el mes actual si está dentro del rango; si no, el último disponible.
+    const now = new Date();
+    const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    cronoMonthSelect.value = sorted.includes(currentYm) ? currentYm : sorted[sorted.length - 1];
+  }
+  updateExportPdfUI();
+}
+
+/* Si el usuario no ha tocado el selector a mano, lo actualizamos con el mes
+   que más se repite entre los informes ya cruzados con éxito. */
+function cronoAutoDetectMonth() {
+  if (cronoMonthManuallySet || !cronoXlsm) return;
+  const counts = {};
+  cronoItems.forEach(i => {
+    if (i.status === "ok" && i.fechaEfectiva) {
+      const ym = dateToYMD(i.fechaEfectiva).slice(0, 7);
+      counts[ym] = (counts[ym] || 0) + 1;
+    }
+  });
+  const entries = Object.entries(counts);
+  if (!entries.length) return;
+  entries.sort((a, b) => b[1] - a[1]);
+  const best = entries[0][0];
+  if ([...cronoMonthSelect.options].some(o => o.value === best)) {
+    cronoMonthSelect.value = best;
+  }
+}
+
+function updateExportPdfUI() {
+  const ready = !!cronoXlsm && !!cronoMonthSelect.value;
+  exportPdfBtn.disabled = !ready;
+  exportPdfHint.textContent = !cronoXlsm ? "Sube primero el Excel." : "Se abre en una pestaña nueva para imprimir o guardar como PDF.";
+}
+
+exportPdfBtn.addEventListener("click", () => {
+  if (!cronoXlsm || !cronoMonthSelect.value) return;
+  const [year, month] = cronoMonthSelect.value.split("-").map(Number);
+  const html = cronoBuildPrintHtml(year, month);
+  const win = window.open("", "_blank");
+  if (!win) { alert("El navegador bloqueó la ventana emergente. Habilítala para este sitio e intenta de nuevo."); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+});
+
+const CRONO_COLOR = {
+  P: "#DCDCDC",
+  R: "#FFC000",
+  E: "#92D050",
+  C: "#BDD7EE",
+  X: "#FF0000",
+};
+
+function cronoBuildPrintHtml(year, month) {
+  const { sheetXml, sharedStrings, dateColMap, rowIndex, categorias } = cronoXlsm;
+
+  // Columnas de fecha del mes elegido, en orden
+  const cols = Object.entries(dateColMap)
+    .filter(([ymd]) => {
+      const [y, m] = ymd.split("-").map(Number);
+      return y === year && m === month;
+    })
+    .map(([ymd, col]) => ({ ymd, col, day: parseInt(ymd.split("-")[2], 10) }))
+    .sort((a, b) => a.day - b.day);
+
+  // Filas dentro del rango de cada categoría, con el valor de cada columna del mes
+  const bloques = categorias.map(cat => {
+    const filas = rowIndex
+      .filter(r => r.row >= cat.startRow && r.row <= cat.endRow)
+      .map(r => {
+        const rowXml = cronoExtractRow(sheetXml, r.row);
+        const cells = rowXml ? cronoExtractCells(rowXml) : [];
+        const cellByCol = {};
+        cells.forEach(c => { cellByCol[c.col] = c; });
+        const valores = cols.map(({ col }) => {
+          const cell = cellByCol[col];
+          return cell ? cronoCellText(cell, sharedStrings).trim().toUpperCase() : "";
+        });
+        return { ...r, valores };
+      });
+    return { label: cat.label, filas };
+  });
+
+  const mesNombre = `${MESES_ES[month - 1]} ${year}`;
+  const diaHeaderCells = cols.map(c => {
+    const d = ddmmyyyyToDate(`${String(c.day).padStart(2,"0")}-${String(month).padStart(2,"0")}-${year}`);
+    const diaSemana = DIAS_ES[d.getUTCDay()];
+    return `<th class="day-col"><div class="day-num">${c.day}</div><div class="day-name">${diaSemana.slice(0,3).toUpperCase()}</div></th>`;
+  }).join("");
+
+  const bloquesHtml = bloques.map(b => {
+    if (!b.filas.length) return "";
+    const filasHtml = b.filas.map((r, idx) => {
+      const valoresHtml = r.valores.map(v => {
+        const bg = CRONO_COLOR[v] || "";
+        const style = bg ? ` style="background:${bg};"` : "";
+        return `<td class="val-col"${style}>${v || ""}</td>`;
+      }).join("");
+      const catCell = idx === 0
+        ? `<td class="cat-col" rowspan="${b.filas.length}">${cronoEscapeHtml(b.label)}</td>`
+        : "";
+      return `<tr>${catCell}<td class="detail-col">${cronoEscapeHtml(r.textBDisplay)}</td><td class="equipo-col">${cronoEscapeHtml(r.textCDisplay)}</td><td class="exec-col">${cronoEscapeHtml(r.textDDisplay)}</td>${valoresHtml}</tr>`;
+    }).join("");
+    return filasHtml;
+  }).join("");
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Cronograma ${mesNombre}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 20px; color: #111; }
+  .toolbar-print { margin-bottom: 14px; }
+  .toolbar-print button {
+    background: #2FA8C0; color: #fff; border: none; border-radius: 6px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  .subtitle { font-size: 12px; color: #444; margin: 0 0 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 8px; }
+  th, td { border: 1px solid #999; padding: 2px 3px; text-align: center; white-space: nowrap; }
+  .detail-col { text-align: left; white-space: normal; min-width: 160px; font-size: 7.5px; }
+  .equipo-col { text-align: left; white-space: normal; min-width: 90px; font-size: 7.5px; }
+  .exec-col { min-width: 60px; font-size: 7.5px; }
+  .cat-col { writing-mode: vertical-rl; transform: rotate(180deg); font-weight: 700; font-size: 9px; background:#EDEDED; }
+  .day-col { min-width: 20px; }
+  .day-num { font-weight: 700; }
+  .day-name { font-size: 6.5px; color: #555; }
+  .val-col { font-weight: 700; font-size: 8px; }
+  .legend { display: flex; gap: 14px; margin-top: 14px; font-size: 11px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 12px; height: 12px; display: inline-block; border: 1px solid #999; }
+  @media print {
+    .toolbar-print { display: none; }
+    body { padding: 0; }
+    table { font-size: 7px; }
+    @page { size: A3 landscape; margin: 10mm; }
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar-print">
+    <button onclick="window.print()">Imprimir / Guardar como PDF</button>
+  </div>
+  <h1>CRONOGRAMA DE MANTENIMIENTO — ${cronoEscapeHtml(mesNombre)}</h1>
+  <p class="subtitle">Arneg Andina · Generado automáticamente desde el cronograma cruzado</p>
+  <table>
+    <thead>
+      <tr>
+        <th>TIPO MTTO</th>
+        <th>ACTIVIDAD DETALLE</th>
+        <th>EQUIPO</th>
+        <th>EJECUTOR</th>
+        ${diaHeaderCells}
+      </tr>
+    </thead>
+    <tbody>
+      ${bloquesHtml}
+    </tbody>
+  </table>
+  <div class="legend">
+    <span><i style="background:${CRONO_COLOR.P}"></i> P = Programado</span>
+    <span><i style="background:${CRONO_COLOR.R}"></i> R = Reprogramado</span>
+    <span><i style="background:${CRONO_COLOR.E}"></i> E = Compromiso cumplido</span>
+    <span><i style="background:${CRONO_COLOR.C}"></i> C = Correctivo</span>
+    <span><i style="background:${CRONO_COLOR.X}"></i> X = Compromiso incumplido</span>
+  </div>
+</body>
+</html>`;
+}
+
+function cronoEscapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
